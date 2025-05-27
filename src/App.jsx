@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 
+// Impor ikon jika Anda menggunakan library ikon seperti react-icons
+// import { FiLock, FiUnlock } from 'react-icons/fi';
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+const ITEMS_PER_PAGE = 15;
 
-const ITEMS_PER_PAGE = 15; // Jumlah tiket yang dimuat setiap kali scroll
-
-// Utility function to format date
 const formatDate = (dateString) => {
     if (!dateString) return 'Tanggal tidak valid';
     const options = { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' };
@@ -16,17 +17,50 @@ const formatDate = (dateString) => {
     }
 };
 
-// Komponen untuk menampilkan satu item tiket
+// Komponen Modal Konfirmasi
+const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message, confirmText, isLoading, children }) => {
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
+                <h3 className="text-xl font-semibold mb-4 text-slate-800">{title}</h3>
+                <p className="text-slate-600 mb-6">{children || message}</p>
+                <div className="flex justify-end space-x-3">
+                    <button
+                        onClick={onClose}
+                        disabled={isLoading}
+                        className="px-4 py-2 rounded-lg text-slate-700 bg-slate-200 hover:bg-slate-300 transition-colors duration-150 disabled:opacity-50"
+                    >
+                        Batal
+                    </button>
+                    <button
+                        onClick={onConfirm}
+                        disabled={isLoading}
+                        className={`px-4 py-2 rounded-lg text-white transition-colors duration-150 disabled:opacity-50 ${
+                            confirmText.toLowerCase().includes('tutup') || confirmText.toLowerCase().includes('hapus')
+                            ? 'bg-red-500 hover:bg-red-600'
+                            : 'bg-indigo-600 hover:bg-indigo-700'
+                        }`}
+                    >
+                        {isLoading ? 'Memproses...' : confirmText}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
 const TicketItem = ({ ticket, onSelectTicket, isSelected }) => {
-    // ticket.id di sini adalah formatted ID seperti 'TICKET-YYYYMMDD-DBID'
-    // ticket.db_id adalah ID asli dari database
+    // Status 'Open' / 'Close' dari transformasi data
     const statusClass = ticket.status === 'Open' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
     const selectedClass = isSelected ? 'bg-indigo-200 border-l-4 border-indigo-600' : 'bg-white';
 
     return (
         <div
             className={`p-3 border border-slate-200 rounded-lg cursor-pointer transition-colors duration-150 shadow-sm hover:bg-indigo-100 ${selectedClass}`}
-            onClick={() => onSelectTicket(ticket.db_id)} // Gunakan db_id untuk memilih
+            onClick={() => onSelectTicket(ticket.db_id)}
         >
             <div className="flex justify-between items-start">
                 <h3 className="text-md font-semibold text-indigo-600">{ticket.id}</h3>
@@ -39,13 +73,12 @@ const TicketItem = ({ ticket, onSelectTicket, isSelected }) => {
     );
 };
 
-// Komponen untuk menampilkan daftar tiket
 const TicketList = ({ tickets, onSelectTicket, selectedTicketDbId }) => {
     return (
         <div className="space-y-2 pr-1">
             {tickets.map(ticket => (
                 <TicketItem
-                    key={ticket.db_id} // Gunakan db_id sebagai key
+                    key={ticket.db_id}
                     ticket={ticket}
                     onSelectTicket={onSelectTicket}
                     isSelected={ticket.db_id === selectedTicketDbId}
@@ -55,7 +88,6 @@ const TicketList = ({ tickets, onSelectTicket, selectedTicketDbId }) => {
     );
 };
 
-// Komponen untuk menampilkan bubble chat
 const ChatBubble = ({ message }) => {
     const isUser = message.type === 'user';
     const bubbleClass = isUser
@@ -71,28 +103,32 @@ const ChatBubble = ({ message }) => {
     );
 };
 
-// Komponen utama Aplikasi
 function App() {
-    const [allTickets, setAllTickets] = useState([]); // Master data tiket dari API
-    const [displayedTickets, setDisplayedTickets] = useState([]); // Tiket yang ditampilkan
+    const [allTickets, setAllTickets] = useState([]);
+    const [displayedTickets, setDisplayedTickets] = useState([]);
     const [currentPage, setCurrentPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
-    const [isLoadingTickets, setIsLoadingTickets] = useState(false); // Loading untuk daftar tiket
-    const [isLoadingMoreTickets, setIsLoadingMoreTickets] = useState(false); // Loading untuk infinite scroll
+    const [isLoadingTickets, setIsLoadingTickets] = useState(false);
+    const [isLoadingMoreTickets, setIsLoadingMoreTickets] = useState(false);
 
-    const [selectedTicketDbId, setSelectedTicketDbId] = useState(null); // Menyimpan ID database tiket yang dipilih
-    const [selectedTicketDetail, setSelectedTicketDetail] = useState(null); // Detail tiket yang dipilih dari API
-    const [isLoadingDetail, setIsLoadingDetail] = useState(false); // Loading untuk detail tiket
+    const [selectedTicketDbId, setSelectedTicketDbId] = useState(null);
+    const [selectedTicketDetail, setSelectedTicketDetail] = useState(null);
+    const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [newMessage, setNewMessage] = useState('');
     const [error, setError] = useState(null);
 
+    // State untuk modal dan update status
+    const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
+    const [statusToChange, setStatusToChange] = useState({ dbId: null, newStatusBackend: '', newStatusDisplay: '' }); // { dbId, newStatusBackend, newStatusDisplay }
+    const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+
     const chatMessagesAreaRef = useRef(null);
     const ticketListContainerRef = useRef(null);
 
-    // Fungsi untuk mengambil semua tiket dari API
     const fetchAllTickets = async () => {
         setIsLoadingTickets(true);
         setError(null);
@@ -106,15 +142,14 @@ function App() {
                 const transformedTickets = result.data.map(ticket => {
                     const createdAtDate = new Date(ticket.created_at);
                     return {
-                        db_id: ticket.id, // ID asli dari database
+                        db_id: ticket.id,
                         id: `TICKET-${createdAtDate.getFullYear()}${String(createdAtDate.getMonth() + 1).padStart(2, '0')}${String(createdAtDate.getDate()).padStart(2, '0')}-${String(ticket.id).padStart(3, '0')}`,
-                        subject: ticket.message?.split('\n')[0] || 'Tanpa Subjek', // Asumsi 'message' adalah subjek awal
+                        subject: ticket.message?.split('\n')[0] || 'Tanpa Subjek',
                         user: ticket.name,
-                        email: ticket.sender, // Asumsi 'sender' adalah email/kontak
-                        status: ticket.status === 'open' ? 'Open' : 'Close',
+                        email: ticket.sender,
+                        status: ticket.status === 'open' ? 'Open' : 'Close', // Display: Open/Close
                         createdAt: ticket.created_at,
                         updatedAt: ticket.updated_at,
-                        // messages, agent, priority akan di-fetch terpisah saat tiket dipilih
                     };
                 }).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
                 setAllTickets(transformedTickets);
@@ -124,7 +159,7 @@ function App() {
         } catch (err) {
             console.error('Gagal mengambil tiket:', err);
             setError('Gagal memuat daftar tiket. Silakan coba lagi nanti.');
-            setAllTickets([]); // Kosongkan tiket jika error
+            setAllTickets([]);
         } finally {
             setIsLoadingTickets(false);
         }
@@ -134,37 +169,31 @@ function App() {
         fetchAllTickets();
     }, []);
 
-    // Memoized filtered list from allTickets
     const allFilteredTickets = useMemo(() => {
         return allTickets.filter(ticket => {
-            const matchesId = ticket.id.toLowerCase().includes(searchTerm.toLowerCase()); // Cari berdasarkan formatted ID
-            const matchesStatus = statusFilter === 'all' || ticket.status === statusFilter;
+            const matchesId = ticket.id.toLowerCase().includes(searchTerm.toLowerCase());
+            const matchesStatus = statusFilter === 'all' || ticket.status === statusFilter; // Filter berdasarkan 'Open' atau 'Close'
             return matchesId && matchesStatus;
         });
     }, [allTickets, searchTerm, statusFilter]);
 
-    // Function to load displayed tickets (pagination/infinite scroll)
     const loadDisplayedTickets = useCallback((page, filteredList) => {
         const newTickets = filteredList.slice(0, page * ITEMS_PER_PAGE);
         setDisplayedTickets(newTickets);
         setHasMore(newTickets.length < filteredList.length);
     }, []);
 
-    // Initial load for displayed tickets and when filters change
     useEffect(() => {
-        setCurrentPage(1); // Reset page
+        setCurrentPage(1);
         loadDisplayedTickets(1, allFilteredTickets);
     }, [allFilteredTickets, loadDisplayedTickets]);
 
-
-    // Infinite scroll handler
     const handleScroll = useCallback(() => {
         if (ticketListContainerRef.current && hasMore && !isLoadingMoreTickets && !isLoadingTickets) {
             const { scrollTop, scrollHeight, clientHeight } = ticketListContainerRef.current;
-            if (scrollHeight - scrollTop - clientHeight < 200) { // Trigger lebih awal
+            if (scrollHeight - scrollTop - clientHeight < 200) {
                 setIsLoadingMoreTickets(true);
                 const nextPage = currentPage + 1;
-                // Simulate network delay for loading more, actual data is already client-side
                 setTimeout(() => {
                     loadDisplayedTickets(nextPage, allFilteredTickets);
                     setCurrentPage(nextPage);
@@ -182,7 +211,6 @@ function App() {
         }
     }, [handleScroll]);
 
-    // Fetch ticket detail when selectedTicketDbId changes
     useEffect(() => {
         if (selectedTicketDbId) {
             const fetchTicketDetail = async () => {
@@ -190,12 +218,16 @@ function App() {
                 setError(null);
                 try {
                     const response = await fetch(`${API_BASE_URL}/ticket/${selectedTicketDbId}`);
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     const data = await response.json();
-                    // Backend /ticket/:id sudah mengembalikan format yang cukup sesuai
-                    setSelectedTicketDetail(data);
+                    // Asumsikan backend mengembalikan status 'open'/'closed', kita ubah untuk display
+                    // Jika backend sudah mengembalikan 'Open'/'Close', baris ini tidak perlu diubah
+                    const transformedDetail = {
+                        ...data,
+                        status: data.status === 'open' ? 'Open' : (data.status === 'closed' ? 'Close' : data.status) // Pastikan konsisten
+                    };
+                    setSelectedTicketDetail(transformedDetail);
+
                 } catch (err) {
                     console.error(`Gagal mengambil detail tiket ${selectedTicketDbId}:`, err);
                     setError(`Gagal memuat detail tiket. ID: ${selectedTicketDbId}`);
@@ -206,42 +238,90 @@ function App() {
             };
             fetchTicketDetail();
         } else {
-            setSelectedTicketDetail(null); // Clear detail jika tidak ada tiket dipilih
+            setSelectedTicketDetail(null);
         }
     }, [selectedTicketDbId]);
 
-
-    // Efek untuk scroll ke bawah saat pesan baru ditambahkan atau tiket dipilih
     useEffect(() => {
         if (chatMessagesAreaRef.current) {
             chatMessagesAreaRef.current.scrollTop = chatMessagesAreaRef.current.scrollHeight;
         }
-    }, [selectedTicketDetail?.messages]); // Bergantung pada messages dari selectedTicketDetail
+    }, [selectedTicketDetail?.messages]);
 
     const handleSelectTicket = (db_id) => {
         setSelectedTicketDbId(db_id);
     };
 
-    const handleToggleTicketStatus = () => {
-        // CATATAN: Backend tidak memiliki endpoint untuk update status.
-        // Perubahan ini hanya bersifat visual di frontend dan tidak persisten.
+    // Fungsi untuk membuka modal konfirmasi perubahan status
+    const handleOpenStatusModal = () => {
         if (!selectedTicketDetail) return;
-        
-        const newStatus = selectedTicketDetail.status === 'Open' ? 'Close' : 'Open';
+        const currentStatusDisplay = selectedTicketDetail.status; // 'Open' atau 'Close'
+        const newStatusBackend = currentStatusDisplay === 'Open' ? 'closed' : 'open';
+        const newStatusDisplay = newStatusBackend === 'open' ? 'Open' : 'Close';
+
+        setStatusToChange({
+            dbId: selectedTicketDbId,
+            newStatusBackend,
+            newStatusDisplay,
+        });
+        setIsStatusModalOpen(true);
+    };
+
+    // Fungsi untuk menangani konfirmasi perubahan status dari modal
+    const handleConfirmUpdateStatus = async () => {
+        if (!statusToChange.dbId) return;
+
+        setIsUpdatingStatus(true);
+        setError(null);
+
+        const originalTicketDetail = { ...selectedTicketDetail };
+        const originalAllTickets = [...allTickets];
         const newUpdatedAt = new Date().toISOString();
 
-        // Optimistic update di detail
-        setSelectedTicketDetail(prev => prev ? { ...prev, status: newStatus, updatedAt: newUpdatedAt } : null);
-
-        // Optimistic update di daftar allTickets (dan secara tidak langsung di displayedTickets)
+        // Optimistic UI Update
+        setSelectedTicketDetail(prev => prev ? { ...prev, status: statusToChange.newStatusDisplay, updatedAt: newUpdatedAt } : null);
         setAllTickets(prevAllTickets =>
             prevAllTickets.map(ticket =>
-                ticket.db_id === selectedTicketDbId
-                    ? { ...ticket, status: newStatus, updatedAt: newUpdatedAt }
+                ticket.db_id === statusToChange.dbId
+                    ? { ...ticket, status: statusToChange.newStatusDisplay, updatedAt: newUpdatedAt }
                     : ticket
             )
         );
-        console.warn("Status tiket diubah di frontend saja. Implementasikan endpoint backend untuk menyimpan perubahan status.");
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/ticket/status/${statusToChange.dbId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ status: statusToChange.newStatusBackend }), // Kirim 'open' atau 'closed'
+            });
+
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || `Gagal memperbarui status tiket (status: ${response.status})`);
+            }
+            
+            // Jika berhasil, data sudah diupdate secara optimistik.
+            // Anda mungkin ingin fetch ulang detail tiket untuk data yang paling baru dari server jika ada perubahan lain.
+            // Untuk sekarang, kita anggap update optimistik cukup.
+            // fetchTicketDetail(statusToChange.dbId); // Optional: re-fetch detail
+            
+            setError(null); // Hapus error jika sebelumnya ada
+            console.log('Status tiket berhasil diperbarui:', result.message);
+
+        } catch (err) {
+            console.error('Gagal memperbarui status tiket:', err);
+            setError(`Gagal memperbarui status: ${err.message}. Perubahan dibatalkan.`);
+            // Rollback optimistic update
+            setSelectedTicketDetail(originalTicketDetail);
+            setAllTickets(originalAllTickets);
+        } finally {
+            setIsUpdatingStatus(false);
+            setIsStatusModalOpen(false);
+            setStatusToChange({ dbId: null, newStatusBackend: '', newStatusDisplay: ''});
+        }
     };
 
     const handleSendMessage = async (e) => {
@@ -251,13 +331,12 @@ function App() {
         const tempMessageId = `temp-${Date.now()}`;
         const agentMessageForUI = {
             id: tempMessageId,
-            sender: 'Agen Helpdesk', // Atau nama agen yang login
+            sender: 'Agen Helpdesk',
             text: newMessage.trim(),
             timestamp: new Date().toISOString(),
             type: 'agent',
         };
 
-        // Optimistic UI update
         setSelectedTicketDetail(prev => prev ? { ...prev, messages: [...prev.messages, agentMessageForUI] } : null);
         const originalMessageInput = newMessage;
         setNewMessage('');
@@ -265,11 +344,9 @@ function App() {
         try {
             const response = await fetch(`${API_BASE_URL}/send-message`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    ticket_id: selectedTicketDbId, // Kirim ID database
+                    ticket_id: selectedTicketDbId,
                     message: originalMessageInput.trim(),
                 }),
             });
@@ -281,17 +358,19 @@ function App() {
 
             const result = await response.json();
             if (result.success) {
-                // Pesan berhasil dikirim ke backend & WhatsApp
-                // Idealnya, backend via Socket.IO akan mengirim pesan baru, atau kita fetch ulang.
-                // Untuk sekarang, kita fetch ulang detail tiket untuk mendapatkan pesan yang sudah tersimpan di DB.
                 const detailResponse = await fetch(`${API_BASE_URL}/ticket/${selectedTicketDbId}`);
                 const updatedDetail = await detailResponse.json();
-                setSelectedTicketDetail(updatedDetail);
+                 // Transformasi status lagi jika diperlukan
+                const transformedDetail = {
+                    ...updatedDetail,
+                    status: updatedDetail.status === 'open' ? 'Open' : (updatedDetail.status === 'closed' ? 'Close' : updatedDetail.status)
+                };
+                setSelectedTicketDetail(transformedDetail);
 
-                // Update updatedAt di allTickets juga
-                setAllTickets(prevAll => prevAll.map(t => 
-                    t.db_id === selectedTicketDbId ? {...t, updatedAt: new Date().toISOString()} : t
-                ));
+
+                setAllTickets(prevAll => prevAll.map(t =>
+                    t.db_id === selectedTicketDbId ? { ...t, updatedAt: new Date().toISOString() } : t
+                ).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))); // Sort ulang
 
             } else {
                 throw new Error(result.message || 'Gagal mengirim pesan dari backend.');
@@ -299,9 +378,8 @@ function App() {
         } catch (err) {
             console.error('Gagal mengirim pesan:', err);
             setError(`Gagal mengirim pesan: ${err.message}`);
-            // Rollback optimistic update jika gagal
             setSelectedTicketDetail(prev => prev ? { ...prev, messages: prev.messages.filter(m => m.id !== tempMessageId) } : null);
-            setNewMessage(originalMessageInput); // Kembalikan teks ke input
+            setNewMessage(originalMessageInput);
         }
     };
     
@@ -321,7 +399,6 @@ function App() {
         .loading-indicator { text-align: center; padding: 10px; color: #4f46e5; }
         .error-message { text-align: center; padding: 10px; color: #ef4444; background-color: #fee2e2; border: 1px solid #fecaca; border-radius: 0.5rem; margin: 10px; }
     `;
-
 
     return (
         <>
@@ -384,22 +461,24 @@ function App() {
                                 <div className="p-4 border-b border-slate-200 bg-slate-50">
                                     <div className="flex justify-between items-center">
                                         <div>
-                                            {/* selectedTicketDetail.id adalah formatted ID dari backend */}
                                             <h3 className="text-lg font-semibold text-indigo-700">{selectedTicketDetail.id}</h3>
                                             <p className="text-md text-slate-600">{selectedTicketDetail.subject}</p>
                                         </div>
                                         <button
-                                            onClick={handleToggleTicketStatus}
-                                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-150 text-white ${
+                                            onClick={handleOpenStatusModal} // Menggunakan fungsi baru untuk membuka modal
+                                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-150 text-white flex items-center space-x-2 ${
                                                 selectedTicketDetail.status === 'Open' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
                                             }`}
+                                            disabled={isUpdatingStatus} // Disable tombol saat proses update
                                         >
-                                            {selectedTicketDetail.status === 'Open' ? 'Tutup Tiket' : 'Buka Kembali Tiket'}
+                                            {/* Ganti dengan ikon jika perlu */}
+                                            {/* {selectedTicketDetail.status === 'Open' ? <FiLock /> : <FiUnlock />} */}
+                                            <span>{selectedTicketDetail.status === 'Open' ? 'Tutup Tiket' : 'Buka Kembali Tiket'}</span>
                                         </button>
                                     </div>
                                     <div className="mt-2 text-sm text-slate-500 space-y-0.5">
                                         <p>Pelapor: <span className="font-medium">{selectedTicketDetail.user}</span> (<span className="font-medium">{selectedTicketDetail.email}</span>)</p>
-                                        <p>Status Saat Ini: <span className="font-medium">{selectedTicketDetail.status}</span></p>
+                                        <p>Status Saat Ini: <span className={`font-medium px-1.5 py-0.5 rounded text-xs ${selectedTicketDetail.status === 'Open' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{selectedTicketDetail.status}</span></p>
                                         <p>Agen: <span className="font-medium">{selectedTicketDetail.agent || '-'}</span></p>
                                         <p>Dibuat: <span className="font-medium">{formatDate(selectedTicketDetail.createdAt)}</span></p>
                                         <p>Update Terakhir: <span className="font-medium">{formatDate(selectedTicketDetail.updatedAt)}</span></p>
@@ -433,12 +512,12 @@ function App() {
                                                     handleSendMessage(e);
                                                 }
                                             }}
-                                            disabled={isLoadingDetail} // Disable saat detail sedang loading
+                                            disabled={isLoadingDetail || isUpdatingStatus || selectedTicketDetail.status === 'Close'} // Disable juga jika tiket ditutup
                                         />
                                         <button
                                             type="submit"
                                             className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-150 disabled:opacity-50"
-                                            disabled={isLoadingDetail || !newMessage.trim()}
+                                            disabled={isLoadingDetail || isUpdatingStatus || !newMessage.trim() || selectedTicketDetail.status === 'Close'} // Disable juga jika tiket ditutup
                                         >
                                             Kirim
                                         </button>
@@ -449,6 +528,20 @@ function App() {
                     </main>
                 </div>
             </div>
+            
+            <ConfirmModal
+                isOpen={isStatusModalOpen}
+                onClose={() => setIsStatusModalOpen(false)}
+                onConfirm={handleConfirmUpdateStatus}
+                title={`Konfirmasi ${statusToChange.newStatusBackend === 'closed' ? 'Penutupan' : 'Pembukaan Kembali'} Tiket`}
+                confirmText={`${statusToChange.newStatusBackend === 'closed' ? 'Ya, Tutup Tiket' : 'Ya, Buka Tiket'}`}
+                isLoading={isUpdatingStatus}
+            >
+                Apakah Anda yakin ingin {statusToChange.newStatusBackend === 'closed' ? 'menutup' : 'membuka kembali'} tiket ini?
+                {statusToChange.newStatusBackend === 'closed' && selectedTicketDetail?.id &&
+                    <p className="text-sm text-amber-700 mt-2 bg-amber-100 p-2 rounded">Pelapor akan menerima notifikasi bahwa tiket <span className="font-semibold">{selectedTicketDetail.id}</span> telah ditutup.</p>
+                }
+            </ConfirmModal>
         </>
     );
 }

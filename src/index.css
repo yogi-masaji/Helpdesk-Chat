@@ -2,3 +2,7 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.bg-black {
+    background-color: #000000b3 !important;
+}
