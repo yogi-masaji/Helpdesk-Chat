@@ -5,19 +5,22 @@ import React, {
   useRef,
   useCallback,
 } from "react";
-import { Routes, Route, useNavigate, Navigate, Outlet, Link } from 'react-router-dom';
-import Login from './login'; // Assuming login.jsx is in the same directory
+import { Routes, Route, useNavigate, Navigate, Outlet } from 'react-router-dom';
+import Login from './login';
+import ComplaintModal from './ComplaintModal';
 
-// --- START: Existing App.jsx content, refactored into HelpdeskDashboard ---
+// --- START: HelpdeskDashboard ---
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const ITEMS_PER_PAGE = 15;
 const DETAIL_POLLING_INTERVAL = 5000;
 const LIST_POLLING_INTERVAL = 5000;
+const COMPLAINT_REPORT_URL_BASE = import.meta.env.VITE_HELPDESK_COMPLAINT_REPORT_URL_BASE || 'http://localhost:3001';
+
 
 const playNotificationSound = () => {
   try {
-    const audio = new Audio("/notification.wav"); // Ensure this path is correct in your public folder
+    const audio = new Audio("/notification.wav");
     audio.play().catch((error) => {
       console.warn("Audio play prevented:", error);
     });
@@ -74,7 +77,13 @@ const ConfirmModal = ({
             )}
             {ticketDetails.gm && (
               <p className="text-slate-700">
-                <span className="font-medium">GM/Kode Lokasi:</span> {ticketDetails.gm}
+                <span className="font-medium">GM:</span> {ticketDetails.gm}
+              </p>
+            )}
+            {/* Menampilkan Lokasi (Nama) di modal konfirmasi jika ada */}
+            {ticketDetails.locationName && (
+              <p className="text-slate-700">
+                <span className="font-medium">Lokasi:</span> {ticketDetails.locationName}
               </p>
             )}
             {ticketDetails.kendala && (
@@ -134,7 +143,10 @@ const TicketItem = ({ ticket, onSelectTicket, isSelected }) => {
   const statusClass =
     ticket.status === "Open"
       ? "bg-green-100 text-green-800"
-      : "bg-red-100 text-red-800";
+      : ticket.status === "Pending"
+      ? "bg-yellow-100 text-yellow-800" 
+      : "bg-red-100 text-red-800"; 
+
   const selectedClass = isSelected
     ? "bg-indigo-200 border-l-4 border-indigo-600"
     : "bg-white";
@@ -155,6 +167,10 @@ const TicketItem = ({ ticket, onSelectTicket, isSelected }) => {
         {ticket.subject}
       </p>
       <p className="text-xs text-slate-500 mt-1">Pelapor: {ticket.user}</p>
+      {/* Menampilkan Lokasi (Nama) di item tiket jika ada, fallback ke Kode Lokasi */}
+      <p className="text-xs text-slate-500">
+        Lokasi: {ticket.location_name || ticket.location_code || "N/A"}
+      </p>
       <p className="text-xs text-slate-500">
         Update: {formatDate(ticket.updatedAt)}
       </p>
@@ -178,12 +194,11 @@ const TicketList = ({ tickets, onSelectTicket, selectedTicketDbId }) => {
 };
 
 const ChatBubble = React.memo(({ message }) => {
-  const isUser = message.type === "user"; // Assuming 'user' is for the client, 'agent' for helpdesk
+  const isUser = message.type === "user";
   const bubbleClass = isUser
-    ? "bg-blue-200 text-blue-800 self-start rounded-br-none" // Client message (typically on the left)
-    : "bg-cyan-100 text-cyan-700 self-end rounded-bl-none"; // Agent/Helpdesk message (typically on the right)
-  
-  // Align user messages to the left, agent messages to the right by controlling parent flex alignment
+    ? "bg-blue-200 text-blue-800 self-start rounded-br-none"
+    : "bg-cyan-100 text-cyan-700 self-end rounded-bl-none";
+
   const alignmentClass = isUser ? "justify-start" : "justify-end";
 
   return (
@@ -201,10 +216,8 @@ const ChatBubble = React.memo(({ message }) => {
   );
 });
 
-// Helper function to get auth token
 const getAuthToken = () => localStorage.getItem('authToken');
 
-// This is the main content of your original App.jsx
 const HelpdeskDashboard = ({ onLogout }) => {
   const [allTickets, setAllTickets] = useState([]);
   const [displayedTickets, setDisplayedTickets] = useState([]);
@@ -232,35 +245,47 @@ const HelpdeskDashboard = ({ onLogout }) => {
   const ticketListContainerRef = useRef(null);
   const prevTicketIdsRef = useRef(new Set());
   const isInitialTicketLoadDoneRef = useRef(false);
-  const navigate = useNavigate();
   const [solusiInput, setSolusiInput] = useState("");
-  const [agentName, setAgentName] = useState(""); // Default, will be updated
+  const [agentName, setAgentName] = useState("");
 
-  // Ref to store the previous scrollHeight of the chat area
+  const [isComplaintModalOpen, setIsComplaintModalOpen] = useState(false);
+  const [complaintTicketIdChat, setComplaintTicketIdChat] = useState(null);
+  const [complaintTicketFullDetails, setComplaintTicketFullDetails] = useState(null);
+  const [toast, setToast] = useState({ show: false, message: "", type: "success" });
+  
+  const [complaintLinks, setComplaintLinks] = useState({});
+
   const prevScrollHeightRef = useRef();
 
-  // Effect to get agent name from localStorage
   useEffect(() => {
     const storedUserData = localStorage.getItem('userData');
     if (storedUserData) {
         try {
             const userData = JSON.parse(storedUserData);
-            // Prefer 'name', fallback to 'username', then to a generic "Agent" if neither exists
             if (userData && userData.name) {
                 setAgentName(userData.name);
             } else if (userData && userData.username) {
                 setAgentName(userData.username);
             } else {
-                setAgentName("Agent"); // Fallback if no specific name field
+                setAgentName("Agent");
             }
         } catch (e) {
             console.error("Gagal memparsing data pengguna dari localStorage:", e);
-            setAgentName("Agent"); // Fallback on error
+            setAgentName("Agent");
         }
     } else {
-        setAgentName("Agent"); // Fallback if no user data
+        setAgentName("Agent");
     }
-  }, []); // Empty dependency array to run once on mount
+  }, []);
+
+  useEffect(() => {
+    if (toast.show) {
+      const timer = setTimeout(() => {
+        setToast(prev => ({ ...prev, show: false }));
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast.show]);
 
 
   const fetchWithAuth = useCallback(async (url, options = {}) => {
@@ -275,7 +300,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
       ...options.headers,
       'Authorization': `Bearer ${token}`,
     };
-    if (options.body && options.method !== 'GET' && options.method !== 'HEAD') {
+    if (options.body && !(options.body instanceof FormData) && options.method !== 'GET' && options.method !== 'HEAD') {
         headers['Content-Type'] = 'application/json';
     }
 
@@ -303,9 +328,18 @@ const HelpdeskDashboard = ({ onLogout }) => {
         const transformedTickets = result.data
           .map((ticket) => {
             const createdAtDate = new Date(ticket.created_at);
+            if (ticket.id_ticket && ticket.complaint_ticket_id_ref && ticket.complaint_category_ref) {
+                setComplaintLinks(prevLinks => ({
+                    ...prevLinks,
+                    [ticket.id_ticket]: { 
+                        complaintId: ticket.complaint_ticket_id_ref,
+                        category: ticket.complaint_category_ref
+                    }
+                }));
+            }
             return {
-              db_id: ticket.id,
-              id: `TICKET-${createdAtDate.getFullYear()}${String(
+              db_id: ticket.id, 
+              id: ticket.id_ticket || `TICKET-${createdAtDate.getFullYear()}${String(
                 createdAtDate.getMonth() + 1
               ).padStart(2, "0")}${String(createdAtDate.getDate()).padStart(
                 2,
@@ -314,10 +348,13 @@ const HelpdeskDashboard = ({ onLogout }) => {
               subject: ticket.message?.split("\n")[0] || "Tanpa Subjek",
               user: ticket.name,
               email: ticket.sender,
-              status: ticket.status === "open" ? "Open" : "Close",
+              status: ticket.status === "open" ? "Open" : ticket.status === "pending" ? "Pending" : "Close",
               createdAt: ticket.created_at,
               updatedAt: ticket.updated_at,
               location_code: ticket.location_code,
+              location_name: ticket.location_name, // Pastikan location_name diambil
+              complaint_ticket_id_ref: ticket.complaint_ticket_id_ref,
+              complaint_category_ref: ticket.complaint_category_ref,
             };
           })
           .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
@@ -348,6 +385,22 @@ const HelpdeskDashboard = ({ onLogout }) => {
   useEffect(() => {
     fetchAllTickets(false);
   }, [fetchAllTickets]);
+
+  useEffect(() => {
+    if (allTickets.length > 0) {
+        const initialLinks = {};
+        allTickets.forEach(ticket => {
+            if (ticket.id && ticket.complaint_ticket_id_ref && ticket.complaint_category_ref) {
+                initialLinks[ticket.id] = { 
+                    complaintId: ticket.complaint_ticket_id_ref,
+                    category: ticket.complaint_category_ref
+                };
+            }
+        });
+        setComplaintLinks(prevLinks => ({ ...prevLinks, ...initialLinks }));
+    }
+  }, [allTickets]);
+
 
   useEffect(() => {
     const token = getAuthToken();
@@ -391,6 +444,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
       );
       if (!ticketExists) {
         setSelectedTicketDbId(null);
+        setSelectedTicketDetail(null);
       }
     } else if (
       selectedTicketDbId &&
@@ -398,13 +452,14 @@ const HelpdeskDashboard = ({ onLogout }) => {
       !isLoadingTickets
     ) {
       setSelectedTicketDbId(null);
+      setSelectedTicketDetail(null);
     }
   }, [allTickets, selectedTicketDbId, isLoadingTickets]);
 
   const allFilteredTickets = useMemo(() => {
     return allTickets.filter((ticket) => {
       const searchTermLower = searchTerm.toLowerCase();
-      const ticketIdLower = ticket.id.toLowerCase();
+      const ticketIdLower = ticket.id.toLowerCase(); 
       const matchesId = ticketIdLower.includes(searchTermLower);
       const matchesStatus =
         statusFilter === "all" || ticket.status === statusFilter;
@@ -432,10 +487,10 @@ const HelpdeskDashboard = ({ onLogout }) => {
     ) {
       const { scrollTop, scrollHeight, clientHeight } =
         ticketListContainerRef.current;
-      if (scrollHeight - scrollTop - clientHeight < 200) { // Threshold to load more
+      if (scrollHeight - scrollTop - clientHeight < 200) {
         setIsLoadingMoreTickets(true);
         const nextPage = currentPage + 1;
-        setTimeout(() => { // Simulate network delay for loading more
+        setTimeout(() => {
           loadDisplayedTickets(nextPage, allFilteredTickets);
           setCurrentPage(nextPage);
           setIsLoadingMoreTickets(false);
@@ -460,27 +515,29 @@ const HelpdeskDashboard = ({ onLogout }) => {
   }, [handleScroll]);
 
   const fetchTicketDetail = useCallback(
-    async (ticketDbId, isPolling = false) => {
+    async (ticketDbIdToFetch, isPolling = false) => {
       if (!isPolling) setIsLoadingDetail(true);
       if (!isPolling) setError(null);
       try {
-        const response = await fetchWithAuth(`${API_BASE_URL}/ticket/${ticketDbId}`);
+        const response = await fetchWithAuth(`${API_BASE_URL}/ticket/${ticketDbIdToFetch}`);
         if (!response.ok) {
           if (!isPolling) {
             throw new Error(`HTTP error! status: ${response.status}`);
           } else {
             if (response.status === 404) {
-              fetchAllTickets(true);
+              fetchAllTickets(true); 
             }
             return;
           }
         }
         const data = await response.json();
-        const transformedDetailFromPollOrFetch = {
+        const transformedDetail = { 
           ...data,
           status:
             data.status === "open"
               ? "Open"
+              : data.status === "pending"
+              ? "Pending"
               : data.status === "closed"
               ? "Close"
               : data.status,
@@ -491,46 +548,68 @@ const HelpdeskDashboard = ({ onLogout }) => {
             : [],
           updatedAt: data.updated_at || new Date().toISOString(),
           location_code: data.location_code || null,
+          location_name: data.location_name || null, // Pastikan location_name diambil
           solusi: data.solusi || null,
+          complaint_ticket_id_ref: data.complaint_ticket_id_ref,
+          complaint_category_ref: data.complaint_category_ref,
         };
+
+        if (transformedDetail.id && transformedDetail.complaint_ticket_id_ref && transformedDetail.complaint_category_ref) {
+            setComplaintLinks(prevLinks => ({
+                ...prevLinks,
+                [transformedDetail.id]: { 
+                    complaintId: transformedDetail.complaint_ticket_id_ref,
+                    category: transformedDetail.complaint_category_ref
+                }
+            }));
+        }
+
         setSelectedTicketDetail((currentDetail) => {
           if (!currentDetail && !isPolling)
-            return transformedDetailFromPollOrFetch;
+            return transformedDetail;
           if (!currentDetail && isPolling)
-            return transformedDetailFromPollOrFetch;
+            return transformedDetail;
           if (!currentDetail) return null;
+
           const messagesChanged =
             JSON.stringify(currentDetail.messages) !==
-            JSON.stringify(transformedDetailFromPollOrFetch.messages);
+            JSON.stringify(transformedDetail.messages);
           const statusChanged =
-            currentDetail.status !== transformedDetailFromPollOrFetch.status;
+            currentDetail.status !== transformedDetail.status;
           const updatedAtChanged =
             currentDetail.updatedAt !==
-            transformedDetailFromPollOrFetch.updatedAt;
-          const solusiChanged = currentDetail.solusi !== transformedDetailFromPollOrFetch.solusi;
+            transformedDetail.updatedAt;
+          const solusiChanged = currentDetail.solusi !== transformedDetail.solusi;
+          const complaintRefChanged = currentDetail.complaint_ticket_id_ref !== transformedDetail.complaint_ticket_id_ref ||
+                                    currentDetail.complaint_category_ref !== transformedDetail.complaint_category_ref;
+          const locationNameChanged = currentDetail.location_name !== transformedDetail.location_name;
 
-          if (messagesChanged || statusChanged || updatedAtChanged || solusiChanged) {
-            return transformedDetailFromPollOrFetch;
+
+          if (messagesChanged || statusChanged || updatedAtChanged || solusiChanged || complaintRefChanged || locationNameChanged) {
+            return transformedDetail;
           }
           return currentDetail;
         });
+
         if (
           isPolling &&
           selectedTicketDetail &&
-          (selectedTicketDetail.status !==
-            transformedDetailFromPollOrFetch.status ||
-            selectedTicketDetail.updatedAt !==
-              transformedDetailFromPollOrFetch.updatedAt)
+          (selectedTicketDetail.status !== transformedDetail.status ||
+           selectedTicketDetail.updatedAt !== transformedDetail.updatedAt ||
+           selectedTicketDetail.location_name !== transformedDetail.location_name ) // Cek perubahan location_name
         ) {
           setAllTickets((prevAll) =>
             prevAll
               .map((t) =>
-                t.db_id === ticketDbId
+                t.db_id === ticketDbIdToFetch
                   ? {
                       ...t,
-                      status: transformedDetailFromPollOrFetch.status,
-                      updatedAt: transformedDetailFromPollOrFetch.updatedAt,
-                      location_code: transformedDetailFromPollOrFetch.location_code,
+                      status: transformedDetail.status,
+                      updatedAt: transformedDetail.updatedAt,
+                      location_code: transformedDetail.location_code,
+                      location_name: transformedDetail.location_name, // Update location_name di list
+                      complaint_ticket_id_ref: transformedDetail.complaint_ticket_id_ref, 
+                      complaint_category_ref: transformedDetail.complaint_category_ref,  
                     }
                   : t
               )
@@ -539,14 +618,14 @@ const HelpdeskDashboard = ({ onLogout }) => {
         }
       } catch (err) {
         console.error(
-          `Gagal mengambil detail tiket ${ticketDbId}${
+          `Gagal mengambil detail tiket ${ticketDbIdToFetch}${
             isPolling ? " (polling)" : ""
           }:`,
           err
         );
         if (!isPolling && err.message !== "Tidak ada token otentikasi." && !err.message.startsWith("Error Otentikasi:")) {
           setError(
-            `Gagal memuat detail tiket. ID: ${ticketDbId}. ${err.message}`
+            `Gagal memuat detail tiket. ID DB: ${ticketDbIdToFetch}. ${err.message}`
           );
           setSelectedTicketDetail(null);
         }
@@ -554,7 +633,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
         if (!isPolling) setIsLoadingDetail(false);
       }
     },
-    [selectedTicketDetail, fetchAllTickets, fetchWithAuth] // Added fetchWithAuth
+    [selectedTicketDetail, fetchAllTickets, fetchWithAuth] 
   );
 
   useEffect(() => {
@@ -583,13 +662,12 @@ const HelpdeskDashboard = ({ onLogout }) => {
     };
   }, [selectedTicketDbId, fetchTicketDetail]);
 
-  // MODIFIED/IMPROVED useEffect for chat scrolling
   useEffect(() => {
     const chatArea = chatMessagesAreaRef.current;
 
     if (chatArea) {
         if (!chatArea.dataset.currentTicketId) {
-            chatArea.dataset.currentTicketId = "null"; 
+            chatArea.dataset.currentTicketId = "null";
         }
         if (!chatArea.dataset.prevMsgCount) {
             chatArea.dataset.prevMsgCount = "0";
@@ -598,7 +676,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
 
     if (!chatArea || !selectedTicketDetail?.messages) {
         if (prevScrollHeightRef.current !== undefined) {
-            prevScrollHeightRef.current = undefined; 
+            prevScrollHeightRef.current = undefined;
         }
         if (chatArea && !selectedTicketDetail?.db_id && chatArea.dataset.currentTicketId !== "null") {
             chatArea.dataset.currentTicketId = "null";
@@ -611,7 +689,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
     const currentTicketIdStr = String(selectedTicketDetail.db_id);
 
     let prevMsgCount;
-    let scrollHeightBeforeUpdate = prevScrollHeightRef.current; 
+    let scrollHeightBeforeUpdate = prevScrollHeightRef.current;
 
     if (chatArea.dataset.currentTicketId === currentTicketIdStr) {
         prevMsgCount = parseInt(chatArea.dataset.prevMsgCount || "0", 10);
@@ -620,20 +698,17 @@ const HelpdeskDashboard = ({ onLogout }) => {
         }
     } else {
         prevMsgCount = 0;
-        chatArea.dataset.prevMsgCount = "0"; 
-        chatArea.dataset.currentTicketId = currentTicketIdStr; 
+        chatArea.dataset.prevMsgCount = "0";
+        chatArea.dataset.currentTicketId = currentTicketIdStr;
         scrollHeightBeforeUpdate = scrollHeight;
     }
 
     const currentMsgCount = selectedTicketDetail.messages.length;
     const hasNewMessages = currentMsgCount > prevMsgCount;
-    
-    const atBottomThreshold = 30; 
-
+    const atBottomThreshold = 30;
     const wasAtBottomBeforeUpdate = (scrollHeightBeforeUpdate !== undefined)
         ? (scrollHeightBeforeUpdate - scrollTop <= clientHeight + atBottomThreshold)
-        : true; 
-
+        : true;
     let shouldScrollToBottom = false;
 
     if (prevMsgCount === 0 && currentMsgCount > 0) {
@@ -644,18 +719,18 @@ const HelpdeskDashboard = ({ onLogout }) => {
 
     if (shouldScrollToBottom) {
         requestAnimationFrame(() => {
-            if (chatMessagesAreaRef.current) { 
+            if (chatMessagesAreaRef.current) {
                 chatMessagesAreaRef.current.scrollTop = chatMessagesAreaRef.current.scrollHeight;
             }
         });
     }
 
     prevScrollHeightRef.current = scrollHeight;
-    if (chatArea) { 
+    if (chatArea) {
        chatArea.dataset.prevMsgCount = currentMsgCount.toString();
     }
 
-}, [selectedTicketDetail?.messages, selectedTicketDetail?.db_id]); 
+}, [selectedTicketDetail?.messages, selectedTicketDetail?.db_id]);
 
 
   const handleSelectTicket = (db_id) => {
@@ -666,8 +741,9 @@ const HelpdeskDashboard = ({ onLogout }) => {
     if (!selectedTicketDetail) return;
     const currentStatusDisplay = selectedTicketDetail.status;
     const newStatusBackend =
-      currentStatusDisplay === "Open" ? "closed" : "open";
-    const newStatusDisplay = newStatusBackend === "open" ? "Open" : "Close";
+      currentStatusDisplay === "Open" || currentStatusDisplay === "Pending" ? "closed" : "open";
+    const newStatusDisplay = newStatusBackend === "open" ? "Open" : "Close"; 
+    
     setStatusToChange({
       dbId: selectedTicketDbId,
       newStatusBackend,
@@ -685,7 +761,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
     if (!statusToChange.dbId || !selectedTicketDetail) return;
 
     if (statusToChange.newStatusBackend === "closed" && !solusiInput.trim()) {
-        return; 
+        return;
     }
 
     setIsUpdatingStatus(true);
@@ -695,14 +771,14 @@ const HelpdeskDashboard = ({ onLogout }) => {
     );
     const originalAllTickets = JSON.parse(JSON.stringify(allTickets));
     const newUpdatedAt = new Date().toISOString();
-    
+
     setSelectedTicketDetail((prev) =>
       prev
         ? {
             ...prev,
-            status: statusToChange.newStatusDisplay,
+            status: statusToChange.newStatusDisplay, 
             updatedAt: newUpdatedAt,
-            solusi: statusToChange.newStatusBackend === "closed" ? solusiInput : prev.solusi, 
+            solusi: statusToChange.newStatusBackend === "closed" ? solusiInput : prev.solusi,
           }
         : null
     );
@@ -712,7 +788,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
           ticket.db_id === statusToChange.dbId
             ? {
                 ...ticket,
-                status: statusToChange.newStatusDisplay,
+                status: statusToChange.newStatusDisplay, 
                 updatedAt: newUpdatedAt,
               }
             : ticket
@@ -739,8 +815,8 @@ const HelpdeskDashboard = ({ onLogout }) => {
             `Gagal memperbarui status tiket (status: ${response.status})`
         );
       }
-      fetchTicketDetail(statusToChange.dbId, false); 
-      setError(null); 
+      fetchTicketDetail(statusToChange.dbId, false);
+      setError(null);
     } catch (err) {
       console.error("Gagal memperbarui status tiket:", err);
       if (err.message !== "Tidak ada token otentikasi." && !err.message.startsWith("Error Otentikasi:")) {
@@ -754,7 +830,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
       setIsUpdatingStatus(false);
       if (!(statusToChange.newStatusBackend === "closed" && !solusiInput.trim()) || error === null) {
           setIsStatusModalOpen(false);
-        setSolusiInput(""); 
+        setSolusiInput("");
           setStatusToChange({
             dbId: null,
             newStatusBackend: "",
@@ -770,17 +846,16 @@ const HelpdeskDashboard = ({ onLogout }) => {
       !newMessage.trim() ||
       !selectedTicketDbId ||
       !selectedTicketDetail ||
-      selectedTicketDetail.status === "Close"
+      selectedTicketDetail.status === "Close" 
     )
       return;
     const tempMessageId = `temp-${Date.now()}`;
-    // Menggunakan agentName dari state untuk sender
     const agentMessageForUI = {
       id: tempMessageId,
-      sender: agentName, // MODIFIED: Menggunakan nama agen yang login
+      sender: agentName,
       text: newMessage.trim(),
       timestamp: new Date().toISOString(),
-      type: "agent", // Helpdesk agent's message
+      type: "agent",
     };
     const previousMessages = selectedTicketDetail.messages
       ? [...selectedTicketDetail.messages]
@@ -839,6 +914,36 @@ const HelpdeskDashboard = ({ onLogout }) => {
     }
   };
 
+  const handleOpenComplaintModal = () => {
+    if (selectedTicketDetail) {
+      setComplaintTicketIdChat(selectedTicketDetail.id); 
+      setComplaintTicketFullDetails(selectedTicketDetail); // Mengirim semua detail tiket
+      setIsComplaintModalOpen(true);
+    }
+  };
+
+  const handleComplaintSubmissionSuccess = (result) => {
+    console.log("Komplain berhasil dibuat:", result);
+    setIsComplaintModalOpen(false);
+    setToast({
+        show: true,
+        message: `Komplain berhasil dibuat dengan ID: ${result.complaintTicketId}`,
+        type: "success",
+    });
+    setComplaintLinks(prev => ({
+        ...prev,
+        [result.originalTicketIdChat]: { 
+            complaintId: result.complaintTicketId,
+            category: result.category
+        }
+    }));
+    if (selectedTicketDbId) {
+        fetchTicketDetail(selectedTicketDbId, false);
+        fetchAllTickets(true); 
+    }
+  };
+
+
   const styles = `
         body { font-family: 'Inter', sans-serif; background-color: #f0f4f8; }
         #chat-messages-area::-webkit-scrollbar { width: 8px; }
@@ -858,6 +963,25 @@ const HelpdeskDashboard = ({ onLogout }) => {
   return (
     <>
       <style>{styles}</style>
+      {toast.show && (
+        <div
+          className={`fixed top-5 right-5 z-[1000] p-4 rounded-lg shadow-lg text-white transition-opacity duration-300 ease-in-out
+            ${toast.type === "success" ? "bg-green-600" : ""}
+            ${toast.type === "error" ? "bg-red-600" : ""}
+            ${toast.show ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+          role="alert"
+        >
+          {toast.message}
+          <button
+            onClick={() => setToast(prev => ({ ...prev, show: false }))}
+            className="ml-4 font-bold text-lg leading-none hover:text-gray-200"
+            aria-label="Close"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
       {error && !error.toLowerCase().includes("polling") && (
         <div className="error-message">
           {error}{" "}
@@ -890,13 +1014,14 @@ const HelpdeskDashboard = ({ onLogout }) => {
             >
               <option value="all">Semua Status</option>
               <option value="Open">Open</option>
+              <option value="Pending">Pending</option> 
               <option value="Close">Close</option>
             </select>
           </div>
           <div
             id="ticket-items-container"
             ref={ticketListContainerRef}
-            className="flex-1 overflow-y-auto min-h-0" 
+            className="flex-1 overflow-y-auto min-h-0"
           >
             {isLoadingTickets ? (
               <div className="loading-indicator">Memuat daftar tiket...</div>
@@ -930,7 +1055,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
           </div>
         </aside>
 
-        <main className="w-full md:w-2/3 bg-white p-0 flex-col hidden md:flex"> 
+        <main className="w-full md:w-2/3 bg-white p-0 flex-col hidden md:flex">
           {isLoadingDetail && !selectedTicketDetail ? (
             <div className="flex justify-center items-center h-full text-slate-500 text-lg">
               Memuat detail tiket...
@@ -940,13 +1065,35 @@ const HelpdeskDashboard = ({ onLogout }) => {
               Pilih tiket dari daftar untuk melihat percakapan.
             </div>
           ) : (
-            <div className="flex-1 flex flex-col min-h-0"> 
+            <div className="flex-1 flex flex-col min-h-0">
               <div className="p-4 border-b border-slate-200 bg-slate-50">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h3 className="text-lg font-semibold text-indigo-700">
-                      {selectedTicketDetail.id}
-                    </h3>
+                    <div className="flex items-center space-x-3">
+                        <h3 className="text-lg font-semibold text-indigo-700">
+                            {selectedTicketDetail.id} 
+                        </h3>
+                        {complaintLinks[selectedTicketDetail.id] ? ( 
+                            <a
+                                href={`${COMPLAINT_REPORT_URL_BASE}/${complaintLinks[selectedTicketDetail.id].complaintId}/${encodeURIComponent(complaintLinks[selectedTicketDetail.id].category)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-1 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-md shadow-sm transition-colors duration-150"
+                                title="Lihat Tiket Komplain"
+                            >
+                                View Complaint Ticket
+                            </a>
+                        ) : (
+                            <button
+                                onClick={handleOpenComplaintModal}
+                                className="px-3 py-1 text-xs font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-md shadow-sm transition-colors duration-150"
+                                title="Buat Komplain untuk Tiket Ini"
+                                disabled={!selectedTicketDetail || selectedTicketDetail.status !== 'Open'}
+                            >
+                                Create complaint ticket
+                            </button>
+                        )}
+                    </div>
                     <p className="text-md text-slate-600">
                       {selectedTicketDetail.subject}
                     </p>
@@ -954,14 +1101,14 @@ const HelpdeskDashboard = ({ onLogout }) => {
                   <button
                     onClick={handleOpenStatusModal}
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-150 text-white flex items-center space-x-2 ${
-                      selectedTicketDetail.status === "Open"
+                      selectedTicketDetail.status === "Open" || selectedTicketDetail.status === "Pending"
                         ? "bg-red-500 hover:bg-red-600"
-                        : "bg-green-500 hover:bg-green-600"
+                        : "bg-green-500 hover:bg-green-600" 
                     }`}
                     disabled={isUpdatingStatus}
                   >
                     <span>
-                      {selectedTicketDetail.status === "Open"
+                      {selectedTicketDetail.status === "Open" || selectedTicketDetail.status === "Pending"
                         ? "Tutup Tiket"
                         : "Buka Kembali"}
                     </span>
@@ -980,9 +1127,16 @@ const HelpdeskDashboard = ({ onLogout }) => {
                     )
                   </p>
                    <p>
-                    GM/Kode Lokasi:{" "}
+                    GM:{" "}
                     <span className="font-medium">
                       {selectedTicketDetail.location_code || "N/A"}
+                    </span>
+                  </p>
+                  {/* Menampilkan Nama Lokasi di detail tiket */}
+                  <p>
+                    Lokasi:{" "}
+                    <span className="font-medium">
+                      {selectedTicketDetail.location_name || "N/A"}
                     </span>
                   </p>
                   <p>
@@ -991,7 +1145,9 @@ const HelpdeskDashboard = ({ onLogout }) => {
                       className={`font-medium px-1.5 py-0.5 rounded text-xs ${
                         selectedTicketDetail.status === "Open"
                           ? "bg-green-100 text-green-800"
-                          : "bg-red-100 text-red-800"
+                          : selectedTicketDetail.status === "Pending"
+                          ? "bg-yellow-100 text-yellow-800" 
+                          : "bg-red-100 text-red-800" 
                       }`}
                     >
                       {selectedTicketDetail.status}
@@ -1028,16 +1184,16 @@ const HelpdeskDashboard = ({ onLogout }) => {
               <div
                 id="chat-messages-area"
                 ref={chatMessagesAreaRef}
-                className="flex-1 overflow-y-auto p-4 space-y-0 bg-slate-50 flex flex-col min-h-0" 
+                className="flex-1 overflow-y-auto p-4 space-y-0 bg-slate-50 flex flex-col min-h-0"
               >
                 {selectedTicketDetail.messages.map((msg) => (
                   <ChatBubble
-                    key={msg.id || `msg-${msg.timestamp}-${Math.random()}`} 
+                    key={msg.id || `msg-${msg.timestamp}-${Math.random()}`}
                     message={msg}
                   />
                 ))}
                 {selectedTicketDetail.messages.length === 0 && (
-                  <p className="text-center text-slate-500 m-auto"> 
+                  <p className="text-center text-slate-500 m-auto">
                     Belum ada pesan dalam tiket ini.
                   </p>
                 )}
@@ -1051,7 +1207,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
                     placeholder={
                       selectedTicketDetail.status === "Close"
                         ? "Tiket sudah ditutup."
-                        : "Ketik balasan Anda..."
+                        : "Ketik balasan Anda..." 
                     }
                     className="w-full p-2 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 resize-none"
                     rows="2"
@@ -1065,7 +1221,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
                     }}
                     disabled={
                       isUpdatingStatus ||
-                      selectedTicketDetail.status === "Close"
+                      selectedTicketDetail.status === "Close" 
                     }
                   />
                   <button
@@ -1074,7 +1230,7 @@ const HelpdeskDashboard = ({ onLogout }) => {
                     disabled={
                       isUpdatingStatus ||
                       !newMessage.trim() ||
-                      selectedTicketDetail.status === "Close"
+                      selectedTicketDetail.status === "Close" 
                     }
                   >
                     Kirim
@@ -1090,8 +1246,8 @@ const HelpdeskDashboard = ({ onLogout }) => {
         isOpen={isStatusModalOpen}
         onClose={() => {
             setIsStatusModalOpen(false);
-            setSolusiInput(""); 
-            setError(null); 
+            setSolusiInput("");
+            setError(null);
         }}
         onConfirm={handleConfirmUpdateStatus}
         title={`Konfirmasi ${
@@ -1105,11 +1261,12 @@ const HelpdeskDashboard = ({ onLogout }) => {
             : "Ya, Buka Tiket"
         }`}
         isLoading={isUpdatingStatus}
-        ticketDetails={
+        ticketDetails={ // Menambahkan locationName ke modal konfirmasi
           statusToChange.newStatusBackend === "closed" && selectedTicketDetail
             ? {
                 namaPelapor: selectedTicketDetail.user,
                 gm: selectedTicketDetail.location_code || "N/A",
+                locationName: selectedTicketDetail.location_name || "N/A", // Menambahkan location_name
                 kendala: selectedTicketDetail.subject,
               }
             : null
@@ -1137,6 +1294,18 @@ const HelpdeskDashboard = ({ onLogout }) => {
             </p>
           )}
       </ConfirmModal>
+
+      {isComplaintModalOpen && selectedTicketDetail && (
+        <ComplaintModal
+            isOpen={isComplaintModalOpen}
+            onClose={() => setIsComplaintModalOpen(false)}
+            ticketIdChat={complaintTicketIdChat} 
+            ticketDetails={complaintTicketFullDetails} // Mengirim semua detail tiket, termasuk location_name
+            fetchWithAuth={fetchWithAuth}
+            apiBaseUrl={API_BASE_URL}
+            onComplaintSubmitted={handleComplaintSubmissionSuccess}
+        />
+      )}
     </>
   );
 };
@@ -1221,6 +1390,7 @@ function App() {
         }
       >
         <Route path="/" element={<HelpdeskDashboard onLogout={handleLogout} />} />
+        {/* Anda bisa menambahkan rute lain yang terproteksi di sini */}
       </Route>
       <Route path="*" element={<Navigate to={isAuthenticated ? "/" : "/login"} replace />} />
     </Routes>
