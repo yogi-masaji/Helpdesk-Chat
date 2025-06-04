@@ -15,7 +15,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const ITEMS_PER_PAGE = 15;
 const DETAIL_POLLING_INTERVAL = 5000;
 const LIST_POLLING_INTERVAL = 5000;
-const COMPLAINT_REPORT_URL_BASE = import.meta.env.VITE_HELPDESK_COMPLAINT_REPORT_URL_BASE || 'http://localhost:3001';
+const COMPLAINT_REPORT_URL_BASE = import.meta.env.VITE_HELPDESK_COMPLAINT_REPORT_URL_BASE;
 
 
 const playNotificationSound = () => {
